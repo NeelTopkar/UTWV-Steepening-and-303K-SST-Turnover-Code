@@ -22,8 +22,7 @@ def inspect_h5(filepath: str, max_keys: int = 200) -> None:
         f.visititems(visitor)
 
 
-#3.2 Define a field mapping (edit once to match your product)
-    #You only need to adjust the strings on the right.
+#3.2 Define a field mapping (edit once to match product)
 @dataclass
 class MLSFields:
     q: str
@@ -58,7 +57,7 @@ FIELDS = MLSFields(
     time="HDFEOS/SWATHS/H2O/Geolocation Fields/Time"
 )
 
-#3.3 Read the raw arrays (minimal and safe)
+#3.3 Read the raw arrays
 def read_dataset(f: h5py.File, path: Optional[str]) -> Optional[np.ndarray]:
     if path is None:
         return None
@@ -81,8 +80,7 @@ def load_mls_l2(filepath: str, fields: MLSFields) -> Dict[str, Optional[np.ndarr
         }
     return out
 
-#3.4 Profile-level “hard fail” checks — what they are and what we do
-    #Status field must be even ; Quality must exceed 0.7 ; Convergence must be < 2.0
+#3.4 Profile-level “hard fail” checks
 
 def hard_fail_mask_ml2h2o_v5(q, quality, status, convergence):
     """
@@ -90,8 +88,8 @@ def hard_fail_mask_ml2h2o_v5(q, quality, status, convergence):
       - Status even
       - Quality > 0.7
       - Convergence < 2.0
-      - plus basic sanity: at least 1 finite q >0 somewhere
-    Returns keep_profile (n_profile,) boolean.
+      - basic sanity: at least 1 finite q >0
+    Returns keep_profile (n_profile,) boolean
     """
     n_prof = q.shape[0]
     keep = np.ones(n_prof, dtype=bool)
@@ -118,8 +116,8 @@ def level_valid_mask_ml2h2o(q, precision):
     Level QC for ML2H2O:
       - q finite
       - q > 0 (required for ln(q))
-      - precision finite and > 0 (MLS convention: negative precision = flagged/bad)
-    Returns valid_level (n_profile, n_level) boolean.
+      - precision finite and > 0
+    Returns valid_level (n_profile, n_level) boolean
     """
     valid = np.isfinite(q) & (q > 0)
 
@@ -129,10 +127,11 @@ def level_valid_mask_ml2h2o(q, precision):
     return valid
 
 #3.6 Subset vertical coordinate to UT (147–316 hPa) and keep UT masks
+
 def subset_ut(pressure, q, precision, valid_level):
     """
     pressure can be (n_level,) or (n_profile, n_level).
-    Returns p_ut, q_ut, precision_ut, valid_ut.
+    Returns p_ut, q_ut, precision_ut, valid_ut
     """
     p1 = pressure[0, :] if pressure.ndim == 2 else pressure
     ut_idx = (p1 >= P_UT_MIN) & (p1 <= P_UT_MAX)
@@ -144,12 +143,13 @@ def subset_ut(pressure, q, precision, valid_level):
 
     return p_ut, q_ut, prec_ut, valid_ut
 
-#3.7 Enforce UUT/LUT coverage (so Δln(q) is defined + stable)
-    #This is the guardrail that prevents “a few surviving levels” from producing noisy flattening metrics.
+#3.7 Enforce UUT/LUT coverage
+    #Prevents a few surviving levels from producing noisy flattening metrics
+        
 def apply_ut_layer_coverage(p_ut, valid_ut, min_frac=0.5):
     """
     Require at least min_frac valid levels in BOTH UUT and LUT per profile.
-    Returns keep_cov (n_profile,) boolean, plus fractions for diagnostics.
+    Returns keep_cov (n_profile,) boolean, plus fractions for diagnostics
     """
     uut_idx = (p_ut >= P_UUT_MIN) & (p_ut <= P_UUT_MAX)
     lut_idx = (p_ut >= P_LUT_MIN) & (p_ut <= P_LUT_MAX)
@@ -169,12 +169,13 @@ def compute_lnq(q_ut, valid_ut):
     lnq[valid_ut] = np.log(q_ut[valid_ut])
     return lnq
 
-#3.9 Record “which pressure levels were valid after QC” (per profile)
+#3.9 Record pressure levels valid after QC (per profile)
     #Keep both: boolean mask valid_ut[profile, plev] and a compact per-profile list or packed bitmask
+
 def valid_levels_as_pressure_lists(p_ut, valid_ut, max_profiles=10):
     """
-    Returns a Python list of lists: valid pressures per profile.
-    (Use only for small samples; storing this for millions of profiles is heavy.)
+    Returns a Python list of lists with valid pressures per profile.
+    (Used only for small samples since storing this for millions of profiles is heavy)
     """
     out = []
     for i in range(min(valid_ut.shape[0], max_profiles)):
@@ -182,9 +183,6 @@ def valid_levels_as_pressure_lists(p_ut, valid_ut, max_profiles=10):
     return out
 
 def pack_valid_mask(valid_ut):
-    """
-    Compact representation: uint8 packed bits per profile.
-    """
     return np.packbits(valid_ut, axis=1)
 
 #QC Report
@@ -198,7 +196,7 @@ def qc_report_ml2h2o(
         sst_bins: list[tuple[float, float]] = [(300.0, 303.0), (303.0, 305.0)],
 ) -> dict:
     """
-    Prints and returns a QC report dictionary.
+    Prints and returns a QC report dictionary
 
     Hard-fail criteria (ML2H2O v005):
       - Quality > 0.7
@@ -208,7 +206,7 @@ def qc_report_ml2h2o(
     Coverage:
       - keep_cov provided by apply_ut_layer_coverage()
 
-    If sst is provided (per-profile), also reports within SST bins.
+    If sst is provided (per-profile), reports within SST bins
     """
     n = len(keep_hard)
     finite_q = np.isfinite(quality) & np.isfinite(status) & np.isfinite(convergence)
@@ -242,7 +240,7 @@ def qc_report_ml2h2o(
 
     # overall
 
-    # by SST bins if provided
+    # by SST bins
     if sst is not None:
         sst = np.asarray(sst)
         for lo, hi in sst_bins:
@@ -251,7 +249,7 @@ def qc_report_ml2h2o(
 
     return report
 
-#3.10 Put it together(Run the functions and finish 3.3)
+#3.10 Running the functions and finishing 3.3
 
 def process_ml2h2o_file_step3(filepath, fields=FIELDS):
     raw = load_mls_l2(filepath, fields)
@@ -260,7 +258,7 @@ def process_ml2h2o_file_step3(filepath, fields=FIELDS):
     precision = raw["precision"]
     pressure = raw["pressure"]
 
-    # --- 3.4 hard fail
+    # -3.4 hard fail
     keep_hard = hard_fail_mask_ml2h2o_v5(
         q=q,
         quality=raw["quality"],
@@ -268,13 +266,13 @@ def process_ml2h2o_file_step3(filepath, fields=FIELDS):
         convergence=raw["convergence"],
     )
 
-    # --- 3.5 level QC
+    # -3.5 level QC
     valid_level = level_valid_mask_ml2h2o(q, precision)
 
-    # --- 3.6 UT subset
+    # -3.6 UT subset
     p_ut, q_ut, prec_ut, valid_ut = subset_ut(pressure, q, precision, valid_level)
 
-    # --- 3.7 coverage rule (per profile)
+    # -3.7 coverage rule (per profile)
     keep_cov, uut_frac, lut_frac = apply_ut_layer_coverage(p_ut, valid_ut, min_frac=0.5)
 
     keep_final = keep_hard & keep_cov
@@ -282,17 +280,17 @@ def process_ml2h2o_file_step3(filepath, fields=FIELDS):
     #QC Report CALL
     qc_report_ml2h2o(raw["quality"], raw["status"], raw["convergence"], keep_hard, keep_cov)
 
-    # --- 3.8 ln(q)
+    # -3.8 ln(q)
     lnq_ut = compute_lnq(q_ut, valid_ut)
 
-    # --- 3.9 summaries
+    # -3.9 summaries
     uut_idx = (p_ut >= P_UUT_MIN) & (p_ut <= P_UUT_MAX)
     lut_idx = (p_ut >= P_LUT_MIN) & (p_ut <= P_LUT_MAX)
     n_valid_ut  = np.sum(valid_ut, axis=1)
     n_valid_uut = np.sum(valid_ut[:, uut_idx], axis=1)
     n_valid_lut = np.sum(valid_ut[:, lut_idx], axis=1)
 
-    # --- 3.10 dataset (store valid mask per profile!)
+    # -3.10 dataset (store valid mask per profile)
     ds = xr.Dataset(
         data_vars={
             "q": (("profile", "plev"), q_ut),
@@ -326,13 +324,12 @@ def process_ml2h2o_file_step3(filepath, fields=FIELDS):
     if raw.get("lon") is not None: ds["lon"] = (("profile",), raw["lon"])
     if raw.get("time") is not None: ds["time"] = (("profile",), raw["time"])
 
-    # usually you carry forward only the passing profiles:
     ds_clean = ds.isel(profile=np.where(ds["keep_final"].values)[0])
 
     return ds_clean
 
 
-#3.11 — Process many MLS files (daily) and concatenate
+#3.11 Process many MLS files (daily) and concatenate
 from glob import glob
 
 files = sorted(glob(r"data/Aura MLS H2O Data/ML2H2O_005-20260216_223159 (2004 Data)/*.he5"))
@@ -355,6 +352,3 @@ for fp in files:
     out_name = os.path.basename(fp).replace(".he5", "_UT.nc")
     ds.to_netcdf(os.path.join(out_dir, out_name))
 
-
-#ds_ut = xr.open_mfdataset("/path/to/processed_ut/*_UT.nc", combine="nested", concat_dim="profile")
-    #To open dataset
